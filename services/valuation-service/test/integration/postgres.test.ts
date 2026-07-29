@@ -4,12 +4,12 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest"; // MODIFIED: Removed unused afterEach, vi
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 
-// === ADDED: Import application database pool to cleanly drain connections on tear-down ===
-import { pool } from "../../src/index.js";
-// =========================================================================================
+// DO NOT statically import { pool } or { app } here!
+// Top-level imports evaluate before beforeAll() sets process.env.DATABASE_URL,
+// causing pg.Pool to bind to default host 'base' and throw getaddrinfo EAI_AGAIN.
 
 function dockerAvailable(): boolean {
   try {
@@ -30,10 +30,14 @@ describe.runIf(dockerAvailable())("valuation-service - real PostgreSQL integrati
 
   beforeAll(async () => {
     container = await new PostgreSqlContainer("postgres:16").start();
+
+    // 1. Set environment variable FIRST so dynamic imports pick up the real Testcontainer URI
+    process.env.DATABASE_URL = container.getConnectionUri();
+
+    // 2. Seed database schema and initial data
     const seedPool = new Pool({ connectionString: container.getConnectionUri() });
     await seedPool.query(readFileSync(SCHEMA_PATH, "utf-8"));
 
-    // A handful of comps so the endpoint has something real to weigh.
     for (let i = 0; i < 10; i++) {
       await seedPool.query(
         `INSERT INTO historical_sales (make, model, year, mileage, damage_severity, title_type, region, sale_price)
@@ -42,25 +46,19 @@ describe.runIf(dockerAvailable())("valuation-service - real PostgreSQL integrati
       );
     }
     await seedPool.end();
-
-    process.env.DATABASE_URL = container.getConnectionUri();
   }, 120_000);
 
   afterAll(async () => {
-    // === ADDED: Cleanly drain open app connections before stopping the container ===
-    // Prevents FATAL (code 57P01) terminating connection errors on container shutdown
+    // Dynamically import pool AFTER beforeAll has set process.env.DATABASE_URL
     try {
+      const { pool } = await import("../../src/index.js");
       await pool?.end();
     } catch {
       // Ignore if pool was already closed
     }
-    // ================================================================================
 
     await container?.stop();
   });
-
-  // === REMOVED: afterEach(() => { vi.resetModules(); }); ===
-  // Dynamic module resets without closing active connection pools cause leaked sockets.
 
   it("returns a real comp valuation for LOT-1001 computed against live Postgres data", async () => {
     const { app } = await import("../../src/index.js");
