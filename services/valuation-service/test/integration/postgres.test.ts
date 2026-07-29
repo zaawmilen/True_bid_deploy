@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"; // MODIFIED:
 import request from "supertest";
 
 // === ADDED: Import application database pool to cleanly drain connections on tear-down ===
-import { pool } from "../../src/db.js";
+import { pool } from "../../src/index.js";
 // =========================================================================================
 
 function dockerAvailable(): boolean {
