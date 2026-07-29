@@ -1,0 +1,13 @@
+{
+  "name": "truebid",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Root-level convenience scripts for running TrueBid's per-service test suites in one command. Each service is still independently buildable/testable on its own - see docs/TESTING.md.",
+  "scripts": {
+    "test": "for d in services/*/; do (cd \"$d\" && npm test) || exit 1; done && (cd frontend && npm test)",
+    "test:integration": "for d in services/*/; do (cd \"$d\" && npm run test:integration) || exit 1; done",
+    "test:all": "for d in services/*/; do (cd \"$d\" && npm run test:all) || exit 1; done && (cd frontend && npm test)",
+    "test:e2e": "cd test/e2e && npm test",
+    "install:all": "for d in services/*/ test/e2e/ frontend/; do (cd \"$d\" && npm install) || exit 1; done"
+  }
+}

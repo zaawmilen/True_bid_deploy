@@ -1,0 +1,13 @@
+{
+  "name": "truebid-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node smoke.mjs"
+  },
+  "devDependencies": {
+    "kafkajs": "^2.2.4",
+    "ws": "^8.21.1"
+  }
+}
