@@ -56,9 +56,8 @@ describe.runIf(dockerAvailable())("valuation-service - real PostgreSQL integrati
       if (pool) {
         await pool.end();
       }
-    } catch {
-       console.error("Error closing app pool:", err); // don't swallow
-  }
+    } catch (err) {
+      console.error("Error closing app pool:", err);
     }
 
     // 2. Stop the container AFTER pools are closed
@@ -66,6 +65,7 @@ describe.runIf(dockerAvailable())("valuation-service - real PostgreSQL integrati
       await container.stop();
     }
   });
+  
   
   it("returns a real comp valuation for LOT-1001 computed against live Postgres data", async () => {
     const { app } = await import("../../src/index.js");
