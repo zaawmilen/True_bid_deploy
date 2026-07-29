@@ -15,8 +15,14 @@ import { config } from "./config.js";
 import { errorFields, logger } from "./logger.js";
 import { postgresQueryDuration, register, valuationRequestsTotal } from "./metrics.js";
 
-const pool = new Pool({ connectionString: config.databaseUrl });
+export const pool = new Pool({ connectionString: config.databaseUrl });
 
+// Without this listener, a background error on an idle client (e.g. the
+// server dropping the connection when a test container stops) becomes an
+// unhandled 'error' event, which is fatal to the Node process.
+   pool.on("error", (err) => {
+ logger.error("unexpected error on idle pg client", errorFields(err));
+});
 export const app = express();
 
 // The frontend calls this over a plain HTTP fetch() from a different

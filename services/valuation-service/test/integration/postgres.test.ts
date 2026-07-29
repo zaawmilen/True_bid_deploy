@@ -36,6 +36,7 @@ describe.runIf(dockerAvailable())("valuation-service - real PostgreSQL integrati
 
     // 2. Seed database schema and initial data
     const seedPool = new Pool({ connectionString: container.getConnectionUri() });
+    seedPool.on("error", (err) => console.error("seedPool idle client error", err));
     await seedPool.query(readFileSync(SCHEMA_PATH, "utf-8"));
 
     for (let i = 0; i < 10; i++) {
@@ -56,7 +57,8 @@ describe.runIf(dockerAvailable())("valuation-service - real PostgreSQL integrati
         await pool.end();
       }
     } catch {
-      // Ignore if pool was already closed or not created
+       console.error("Error closing app pool:", err); // don't swallow
+  }
     }
 
     // 2. Stop the container AFTER pools are closed
@@ -79,6 +81,9 @@ describe.runIf(dockerAvailable())("valuation-service - real PostgreSQL integrati
 
   it("returns none/null confidence for a lot with zero matching historical sales", async () => {
     const seedPool = new Pool({ connectionString: container.getConnectionUri() });
+    pool.on("error", (err) => {
+  logger.error("unexpected error on idle pg client", errorFields(err));
+       });
     await seedPool.query(
       `INSERT INTO lots (lot_id, make, model, year, mileage, damage_primary, title_type,
                          run_and_drive, yard_location, yard_lat, yard_lon, photo_angles_captured)
