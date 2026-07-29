@@ -1,0 +1,28 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+# All five services listen on 8000 *inside* their container regardless of
+# what docker-compose.yml maps that to on the host (e.g. cost-engine is
+# 8001:8000 externally, but Prometheus is on the same compose network and
+# talks to it as cost-engine:8000 directly - no host port involved).
+scrape_configs:
+  - job_name: gateway
+    static_configs:
+      - targets: ['gateway:8000']
+
+  - job_name: cost-engine
+    static_configs:
+      - targets: ['cost-engine:8000']
+
+  - job_name: valuation-service
+    static_configs:
+      - targets: ['valuation-service:8000']
+
+  - job_name: anomaly-service
+    static_configs:
+      - targets: ['anomaly-service:8000']
+
+  - job_name: bid-stream-consumer
+    static_configs:
+      - targets: ['bid-stream-consumer:8000']
