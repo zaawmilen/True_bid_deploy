@@ -48,18 +48,23 @@ describe.runIf(dockerAvailable())("valuation-service - real PostgreSQL integrati
     await seedPool.end();
   }, 120_000);
 
-  afterAll(async () => {
-    // Dynamically import pool AFTER beforeAll has set process.env.DATABASE_URL
+ afterAll(async () => {
+    // 1. Drain the app pool FIRST so open sockets disconnect gracefully
     try {
       const { pool } = await import("../../src/index.js");
-      await pool?.end();
+      if (pool) {
+        await pool.end();
+      }
     } catch {
-      // Ignore if pool was already closed
+      // Ignore if pool was already closed or not created
     }
 
-    await container?.stop();
+    // 2. Stop the container AFTER pools are closed
+    if (container) {
+      await container.stop();
+    }
   });
-
+  
   it("returns a real comp valuation for LOT-1001 computed against live Postgres data", async () => {
     const { app } = await import("../../src/index.js");
     const res = await request(app).get("/valuation/LOT-1001");
