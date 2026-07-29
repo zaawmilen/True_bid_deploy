@@ -670,9 +670,8 @@ Therefore, the default demo exercises the high-confidence valuation path.
 
 ## Testing and Verification
 
-[![CI](https://github.com/<owner>/<repo>/actions/workflows/ci.yml/badge.svg)](https://github.com/<owner>/<repo>/actions/workflows/ci.yml)
+[![CI](https://github.com/zaawmilen/True_bid_deploy/actions/workflows/ci.yml/badge.svg)](https://github.com/zaawmilen/True_bid_deploy/actions/workflows/ci.yml)
 
-*(replace `<owner>/<repo>` above with this repo's actual GitHub path once it's pushed - the workflow itself, `.github/workflows/ci.yml`, needs no changes.)*
 
 Every push and pull request against `main` runs the full suite in GitHub Actions across three tiers: type-checking + unit tests (fast, every service), integration tests (mocked infra plus real Postgres/Redis/Kafka via testcontainers, using the runner's built-in Docker daemon), and an end-to-end smoke test against the actual `docker compose up` stack. See [`docs/TESTING.md#continuous-integration`](docs/TESTING.md#continuous-integration) for the full breakdown.
 
