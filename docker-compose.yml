@@ -1,0 +1,282 @@
+name: truebid
+
+services:
+  # KRaft mode (Kafka's own Raft-based metadata quorum) replaces Zookeeper
+  # entirely as of this config - one fewer JVM container, meaningfully
+  # lower baseline memory on any host. Combined mode (broker+controller in
+  # one process) is fine for this single-broker demo topology.
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    environment:
+      KAFKA_NODE_ID: 1
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # Bind on all interfaces (0.0.0.0), not the `kafka` hostname
+      # specifically - binding to a named host can fail depending on
+      # exactly when/how the container's own DNS resolves itself during
+      # startup on some Docker setups (seen in practice on WSL2).
+      # Advertised listeners below are still name-specific per audience;
+      # only the bind address changes.
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:9094,CONTROLLER://0.0.0.0:9093
+      # Two listeners, two audiences. Kafka's protocol makes a client
+      # reconnect to whatever host/port the broker *advertises* after the
+      # initial connection - so one listener can't correctly serve both:
+      #   - PLAINTEXT (kafka:9092) - other containers on the compose
+      #     network (every service's KAFKA_BOOTSTRAP below uses this).
+      #   - PLAINTEXT_HOST (localhost:9094) - anything running on the
+      #     host itself: test/e2e/smoke.mjs run directly, a local
+      #     kafka-console-consumer, etc. Without this, a host client that
+      #     connects to the old kafka:9092 host-port-mapping gets told to
+      #     reconnect to "kafka:9092" - a hostname the host can't resolve
+      #     (ENOTFOUND) unless you hand-edit /etc/hosts.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      # 9092 is intentionally NOT published to the host - it advertises
+      # `kafka:9092`, which only means something on the compose network.
+      # Publishing it would let a host client connect but then break on
+      # the very next metadata refresh. 9094 is the one host tools should
+      # use.
+      - "9094:9094"
+    healthcheck:
+      # `cub kafka-ready` ships in the Confluent image specifically for
+      # this - it checks the broker is actually electable/queryable, not
+      # just that the process is running. Runs inside the container via
+      # `docker exec`, so it correctly uses the internal listener.
+      test: ["CMD", "cub", "kafka-ready", "-b", "localhost:9092", "1", "20"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # Jaeger's all-in-one image bundles the OTLP receiver, the trace
+  # storage backend (in-memory by default - fine for a demo, traces
+  # don't need to survive a restart the way Postgres data does), and the
+  # UI in one container. A standalone otel-collector isn't added here on
+  # purpose - it earns its place when you need sampling policies or
+  # fan-out to multiple backends, neither of which a single-instance
+  # demo needs. See docs/PRODUCTION_READINESS.md.
+  jaeger:
+    image: jaegertracing/all-in-one:1.65.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"   # trace search UI
+      - "4318:4318"                          # OTLP/HTTP receiver
+    restart: on-failure
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-truebid}
+      POSTGRES_USER: ${POSTGRES_USER:-truebid}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-truebid_local_dev}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ./db:/docker-entrypoint-initdb.d
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U truebid -d truebid"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Comparable-sale valuation model, served as its own inference service
+  # so it can be redeployed/retrained independently of the API gateway.
+  #
+  # KNOWN TRADEOFF (see docs/PRODUCTION_READINESS.md): the 8002 host
+  # port below means this is reachable directly, bypassing the
+  # gateway's JWT auth entirely. Left mapped because local dev/testing
+  # hits this port directly (see TESTING.md). The frontend itself has
+  # been updated to go through the gateway instead - this port is a
+  # local-dev/test convenience, not something that should be exposed
+  # on a real deployment. If deploying somewhere public, don't publish
+  # this port (or put it behind network policy the gateway is exempt
+  # from).
+  valuation-service:
+    build: ./services/valuation-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-truebid}:${POSTGRES_PASSWORD:-truebid_local_dev}@postgres:5432/${POSTGRES_DB:-truebid}
+      SERVICE_NAME: valuation-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    ports:
+      - "8002:8000"
+    restart: on-failure
+    healthcheck:
+      # Checks /healthz (liveness), not /readyz - a downstream Postgres
+      # outage should surface via /readyz to whatever's routing traffic,
+      # not cause Docker to kill and restart an otherwise-fine process.
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Recomputes total landed cost (fees + freight + repair band) on every
+  # bid tick and publishes to `cost-updates`.
+  cost-engine:
+    build: ./services/cost-engine
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      DATABASE_URL: postgresql://${POSTGRES_USER:-truebid}:${POSTGRES_PASSWORD:-truebid_local_dev}@postgres:5432/${POSTGRES_DB:-truebid}
+      SERVICE_NAME: cost-engine
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    ports:
+      - "8001:8000"
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Streaming anomaly / bid-integrity detection.
+  anomaly-service:
+    build: ./services/anomaly-service
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      REDIS_URL: redis://redis:6379/0
+      SERVICE_NAME: anomaly-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    restart: on-failure
+    healthcheck:
+      # No `ports:` mapping needed for this - the check runs inside the
+      # container via `docker exec`, not from the host.
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Public-facing API + WebSocket gateway. Pushes live cost/risk/anomaly
+  # updates to bidder UIs as they happen.
+  gateway:
+    build: ./services/gateway
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cost-engine:
+        condition: service_healthy
+      valuation-service:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      COST_ENGINE_URL: http://cost-engine:8000
+      VALUATION_SERVICE_URL: http://valuation-service:8000
+      SERVICE_NAME: gateway
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # Simulated bidder auth (see docs/PRODUCTION_READINESS.md) - the
+      # default below is an obviously-fake placeholder that only works
+      # because NODE_ENV isn't "production" locally; auth.ts refuses to
+      # start under NODE_ENV=production with this value still in place.
+      JWT_SECRET: ${JWT_SECRET:-truebid-local-dev-insecure-secret-change-me}
+      JWT_EXPIRY: ${JWT_EXPIRY:-2h}
+      RATE_LIMIT_HTTP_WINDOW_MS: ${RATE_LIMIT_HTTP_WINDOW_MS:-60000}
+      RATE_LIMIT_HTTP_MAX: ${RATE_LIMIT_HTTP_MAX:-120}
+      RATE_LIMIT_WS_MAX_CONNECTIONS: ${RATE_LIMIT_WS_MAX_CONNECTIONS:-10}
+      RATE_LIMIT_WS_WINDOW_MS: ${RATE_LIMIT_WS_WINDOW_MS:-60000}
+    ports:
+      - "8000:8000"
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Simulates bids arriving from the existing real-time auction platform
+  # and publishes them onto the `bids` Kafka topic.
+  bid-stream-consumer:
+    build: ./services/bid-stream-consumer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      SERVICE_NAME: bid-stream-consumer
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Scrapes /metrics on all 5 app services every 10s. No depends_on here on
+  # purpose - Prometheus retries failed scrapes on its own schedule, so
+  # there's no real ordering requirement, and coupling it to the app
+  # services' healthchecks would just slow down `docker compose up` for
+  # no benefit.
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    restart: on-failure
+
+  # Auto-provisioned on boot: the datasource and dashboard JSON under
+  # ./monitoring/grafana/provisioning are picked up automatically, so
+  # there's nothing to click through - http://localhost:3000 (default
+  # login admin/admin) shows the TrueBid dashboard immediately.
+  grafana:
+    image: grafana/grafana:11.2.0
+    depends_on:
+      - prometheus
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "${GRAFANA_ANONYMOUS:-false}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    restart: on-failure
+
+volumes:
+  pgdata:
+  prometheus-data:
+  grafana-data:

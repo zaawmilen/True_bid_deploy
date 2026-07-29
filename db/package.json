@@ -1,0 +1,14 @@
+{
+  "name": "truebid-db-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate-seed": "tsx generate-seed.ts > 002_historical_sales_seed.sql"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "tsx": "^4.16.5",
+    "@types/node": "^20.14.15"
+  }
+}

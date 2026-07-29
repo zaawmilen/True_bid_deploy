@@ -1,0 +1,86 @@
+<svg width="680" height="620" viewBox="0 0 680 620" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>TrueBid architecture diagram</title>
+<desc>A bid simulator publishes to a Kafka "bids" topic, which fans out to a cost-engine and an anomaly-service, each publishing to their own Kafka topic, which merge into a gateway that pushes live updates over WebSocket to the bidder UI. A separate valuation-service is queried directly by the bidder UI over HTTP.</desc>
+
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#6b6a66" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+
+<style>
+  text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .th { font-size: 14px; font-weight: 600; }
+  .ts { font-size: 12px; font-weight: 400; }
+  .box { stroke-width: 1; rx: 8; }
+  .arr { stroke: #6b6a66; stroke-width: 1; fill: none; }
+  .leader { stroke: #6b6a66; stroke-width: 1; stroke-dasharray: 4 4; fill: none; }
+</style>
+
+<rect width="680" height="620" fill="#ffffff"/>
+
+<!-- Row A: bid simulator -->
+<rect class="box" x="240" y="40" width="200" height="56" rx="8" fill="#EDEDEA" stroke="#9C9A92"/>
+<text class="th" x="340" y="63" text-anchor="middle" fill="#33332F">Bid simulator</text>
+<text class="ts" x="340" y="81" text-anchor="middle" fill="#5C5B56">Publishes to Kafka</text>
+<line x1="340" y1="96" x2="340" y2="136" class="arr" marker-end="url(#arrow)"/>
+
+<!-- Row B: bids topic -->
+<rect class="box" x="240" y="136" width="200" height="56" rx="8" fill="#EDEDEA" stroke="#9C9A92"/>
+<text class="th" x="340" y="159" text-anchor="middle" fill="#33332F">bids</text>
+<text class="ts" x="340" y="177" text-anchor="middle" fill="#5C5B56">Kafka topic</text>
+<path d="M340,192 L340,212 L200,212 L200,232" class="arr" marker-end="url(#arrow)"/>
+<path d="M340,192 L340,212 L480,212 L480,232" class="arr" marker-end="url(#arrow)"/>
+
+<!-- Row C: cost-engine + anomaly-service -->
+<rect class="box" x="100" y="232" width="200" height="56" rx="8" fill="#E1F0F3" stroke="#4A90A4"/>
+<text class="th" x="200" y="255" text-anchor="middle" fill="#1F4A54">Cost engine</text>
+<text class="ts" x="200" y="273" text-anchor="middle" fill="#2E6A78">Fee + freight + repair</text>
+
+<rect class="box" x="380" y="232" width="200" height="56" rx="8" fill="#FBEAE5" stroke="#C1533D"/>
+<text class="th" x="480" y="255" text-anchor="middle" fill="#7A3323">Anomaly service</text>
+<text class="ts" x="480" y="273" text-anchor="middle" fill="#9C4530">Bid-integrity scoring</text>
+
+<line x1="200" y1="288" x2="200" y2="328" class="arr" marker-end="url(#arrow)"/>
+<line x1="480" y1="288" x2="480" y2="328" class="arr" marker-end="url(#arrow)"/>
+
+<!-- Row D: cost-updates + anomaly-scores topics -->
+<rect class="box" x="100" y="328" width="200" height="56" rx="8" fill="#EDEDEA" stroke="#9C9A92"/>
+<text class="th" x="200" y="351" text-anchor="middle" fill="#33332F">cost-updates</text>
+<text class="ts" x="200" y="369" text-anchor="middle" fill="#5C5B56">Kafka topic</text>
+
+<rect class="box" x="380" y="328" width="200" height="56" rx="8" fill="#EDEDEA" stroke="#9C9A92"/>
+<text class="th" x="480" y="351" text-anchor="middle" fill="#33332F">anomaly-scores</text>
+<text class="ts" x="480" y="369" text-anchor="middle" fill="#5C5B56">Kafka topic</text>
+
+<path d="M200,384 L200,404 L340,404 L340,424" class="arr" marker-end="url(#arrow)"/>
+<path d="M480,384 L480,404 L340,404 L340,424" class="arr" marker-end="url(#arrow)"/>
+
+<!-- Row E: gateway + valuation-service -->
+<rect class="box" x="240" y="424" width="200" height="56" rx="8" fill="#EFEAF7" stroke="#6B5CA5"/>
+<text class="th" x="340" y="447" text-anchor="middle" fill="#3D3563">Gateway</text>
+<text class="ts" x="340" y="465" text-anchor="middle" fill="#544893">WebSocket fan-out</text>
+
+<rect class="box" x="460" y="424" width="180" height="56" rx="8" fill="#E1F0F3" stroke="#4A90A4"/>
+<text class="th" x="550" y="447" text-anchor="middle" fill="#1F4A54">Valuation service</text>
+<text class="ts" x="550" y="465" text-anchor="middle" fill="#2E6A78">Comp-sale lookup</text>
+
+<line x1="340" y1="480" x2="340" y2="520" class="arr" marker-end="url(#arrow)"/>
+<path d="M550,480 L550,500 L420,500 L420,520" class="leader" marker-end="url(#arrow)"/>
+<text class="ts" x="466" y="495" text-anchor="middle" fill="#5C5B56">HTTP fetch</text>
+
+<!-- Row F: bidder UI -->
+<rect class="box" x="240" y="520" width="200" height="56" rx="8" fill="#EFEAF7" stroke="#6B5CA5"/>
+<text class="th" x="340" y="543" text-anchor="middle" fill="#3D3563">Bidder UI</text>
+<text class="ts" x="340" y="561" text-anchor="middle" fill="#544893">Live cost + risk ticker</text>
+
+<!-- Legend -->
+<rect x="40" y="592" width="12" height="12" rx="3" fill="#EDEDEA" stroke="#9C9A92"/>
+<text class="ts" x="58" y="602" fill="#5C5B56">Infra / Kafka</text>
+<rect x="170" y="592" width="12" height="12" rx="3" fill="#E1F0F3" stroke="#4A90A4"/>
+<text class="ts" x="188" y="602" fill="#5C5B56">Compute</text>
+<rect x="280" y="592" width="12" height="12" rx="3" fill="#FBEAE5" stroke="#C1533D"/>
+<text class="ts" x="298" y="602" fill="#5C5B56">Risk</text>
+<rect x="360" y="592" width="12" height="12" rx="3" fill="#EFEAF7" stroke="#6B5CA5"/>
+<text class="ts" x="378" y="602" fill="#5C5B56">Client-facing</text>
+</svg>
