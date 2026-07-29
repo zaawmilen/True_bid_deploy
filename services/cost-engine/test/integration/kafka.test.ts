@@ -81,6 +81,22 @@ describe.runIf(dockerAvailable())("cost-engine - real Kafka (KRaft) integration"
     // bids the way bid-stream-consumer does, and reading cost-updates the
     // way the gateway does - kept independent of the module under test.
     const testKafka = new Kafka({ clientId: "test-harness", brokers: [bootstrapServers] });
+
+    // === ADDED: Explicitly create topics before attaching consumers/producers ===
+    // Prevents KafkaJSProtocolError: This server does not host this topic-partition
+    const admin = testKafka.admin();
+    await admin.connect();
+    await admin.createTopics({
+      waitForLeaders: true,
+      timeout: 10_000,
+      topics: [
+        { topic: "bids", numPartitions: 1, replicationFactor: 1 },
+        { topic: "cost-updates", numPartitions: 1, replicationFactor: 1 },
+      ],
+    });
+    await admin.disconnect();
+    // =========================================================================
+
     testProducer = testKafka.producer();
     resultsConsumer = testKafka.consumer({ groupId: "test-harness-results" });
     await testProducer.connect();
