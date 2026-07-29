@@ -11,6 +11,7 @@ const connectMock = vi.fn().mockResolvedValue({ query: queryMock, release: relea
 vi.mock("pg", () => ({
   Pool: vi.fn().mockImplementation(function Pool(this: any) {
     this.connect = connectMock;
+    this.on = vi.fn();
   }),
 }));
 
