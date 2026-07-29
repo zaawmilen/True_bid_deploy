@@ -65,7 +65,7 @@ describe.runIf(dockerAvailable())("valuation-service - real PostgreSQL integrati
       await container.stop();
     }
   });
-  
+
   
   it("returns a real comp valuation for LOT-1001 computed against live Postgres data", async () => {
     const { app } = await import("../../src/index.js");
@@ -81,9 +81,7 @@ describe.runIf(dockerAvailable())("valuation-service - real PostgreSQL integrati
 
   it("returns none/null confidence for a lot with zero matching historical sales", async () => {
     const seedPool = new Pool({ connectionString: container.getConnectionUri() });
-    pool.on("error", (err) => {
-  logger.error("unexpected error on idle pg client", errorFields(err));
-       });
+    seedPool.on("error", (err) => console.error("seedPool idle client error", err));
     await seedPool.query(
       `INSERT INTO lots (lot_id, make, model, year, mileage, damage_primary, title_type,
                          run_and_drive, yard_location, yard_lat, yard_lon, photo_angles_captured)
