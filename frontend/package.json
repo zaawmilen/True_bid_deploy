@@ -1,0 +1,14 @@
+{
+  "name": "truebid-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Static, no-build-step frontend. calc.js holds the pure/testable logic extracted from index.html's inline script; index.html imports it as a native ES module.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest watch"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
+  }
+}

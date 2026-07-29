@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TrueBid — Live Lot Ticker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #14171C;
+    --panel: #1C2028;
+    --panel-line: #2A2F38;
+    --text: #E8E6E1;
+    --muted: #8A8F98;
+    --steel: #4A90A4;
+    --amber: #D89B3C;
+    --brick: #C1533D;
+    --mono: 'IBM Plex Mono', monospace;
+    --display: 'Space Grotesk', sans-serif;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    min-height:100vh;
+    padding: 32px 20px 60px;
+  }
+  .wrap{ max-width: 720px; margin: 0 auto; }
+
+  /* ---- header / lot identity ---- */
+  .lot-header{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-end;
+    border-bottom: 1px solid var(--panel-line);
+    padding-bottom: 16px;
+    margin-bottom: 20px;
+  }
+  .lot-id{
+    font-family: var(--display);
+    font-weight:700;
+    font-size: 28px;
+    letter-spacing: -0.02em;
+  }
+  .lot-meta{ color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .conn-status{
+    display:flex; align-items:center; gap:8px;
+    font-size:12px; color: var(--muted); text-transform:uppercase; letter-spacing:0.08em;
+  }
+  .dot{ width:7px; height:7px; border-radius:50%; background: var(--muted); }
+  .dot.live{ background: var(--steel); box-shadow:0 0 0 0 rgba(74,144,164,0.6); animation: pulse 1.8s infinite; }
+  @keyframes pulse{
+    0%{ box-shadow:0 0 0 0 rgba(74,144,164,0.5); }
+    70%{ box-shadow:0 0 0 6px rgba(74,144,164,0); }
+    100%{ box-shadow:0 0 0 0 rgba(74,144,164,0); }
+  }
+
+  /* ---- current bid strip ---- */
+  .bid-strip{
+    display:flex; justify-content:space-between; align-items:center;
+    margin-bottom: 28px;
+  }
+  .bid-label{ color: var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:0.1em; }
+  .bid-value{ font-size:22px; font-weight:600; }
+  .bidder-tag{ color: var(--steel); font-size:12px; }
+
+  /* ---- signature: total landed cost ---- */
+  .total-panel{
+    background: var(--panel);
+    border: 1px solid var(--panel-line);
+    border-radius: 6px;
+    padding: 24px 24px 20px;
+    margin-bottom: 20px;
+  }
+  .total-label{
+    color: var(--muted); font-size: 12px; text-transform:uppercase; letter-spacing:0.1em;
+    margin-bottom: 6px;
+  }
+  .total-value{
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 52px;
+    letter-spacing: -0.01em;
+    line-height:1;
+    transition: color 0.15s ease;
+  }
+  .total-value.flash{ color: var(--amber); }
+  .total-range{ color: var(--muted); font-size: 13px; margin-top: 8px; }
+
+  /* ---- cost stack bar: the signature element ---- */
+  .stack-bar{
+    display:flex;
+    height: 34px;
+    border-radius: 4px;
+    overflow:hidden;
+    margin-top: 18px;
+    border: 1px solid var(--panel-line);
+  }
+  .seg{ height:100%; transition: width 0.4s ease; }
+  .seg-bid{ background:#3A4048; }
+  .seg-fee{ background: var(--steel); }
+  .seg-freight{ background:#6B7B8A; }
+  .seg-repair{ background: var(--amber); opacity:0.85; }
+
+  .stack-legend{
+    display:flex; flex-wrap:wrap; gap:16px;
+    margin-top: 12px; font-size: 11px; color: var(--muted);
+  }
+  .stack-legend span{ display:flex; align-items:center; gap:6px; }
+  .swatch{ width:9px; height:9px; border-radius:2px; display:inline-block; }
+
+  /* ---- two-column: risk + valuation ---- */
+  .grid-2{ display:grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+  @media (max-width:560px){ .grid-2{ grid-template-columns: 1fr; } }
+
+  .card{
+    background: var(--panel);
+    border: 1px solid var(--panel-line);
+    border-radius: 6px;
+    padding: 18px;
+  }
+  .card-label{ color: var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:10px; }
+
+  .risk-badge{
+    display:inline-flex; align-items:center; gap:8px;
+    font-family: var(--display); font-weight:600; font-size:15px;
+    padding: 5px 12px; border-radius: 4px;
+  }
+  .risk-low{ color:#7FA98A; background: rgba(127,169,138,0.12); }
+  .risk-medium{ color: var(--amber); background: rgba(216,155,60,0.12); }
+  .risk-high{ color: var(--brick); background: rgba(193,83,61,0.14); }
+  .risk-detail{ color: var(--muted); font-size: 12px; margin-top: 10px; line-height:1.5; }
+
+  .val-number{ font-size: 22px; font-weight:600; }
+  .val-conf{ font-size:11px; text-transform:uppercase; letter-spacing:0.08em; margin-top:6px; }
+  .conf-high{ color:#7FA98A; }
+  .conf-medium{ color: var(--amber); }
+  .conf-none{ color: var(--muted); }
+
+  .footnote{
+    color: var(--panel-line);
+    font-size: 11px;
+    text-align:center;
+    margin-top: 30px;
+    letter-spacing: 0.04em;
+  }
+  .footnote b{ color: var(--muted); font-weight:500; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lot-header">
+    <div>
+      <div class="lot-id" id="lotId">LOT-1001</div>
+      <div class="lot-meta" id="lotMeta">2021 Ford Mustang · Front End · Salvage · Run &amp; Drive</div>
+    </div>
+    <div class="conn-status">
+      <span class="dot" id="connDot"></span>
+      <span id="connLabel">Connecting…</span>
+    </div>
+  </div>
+
+  <div class="bid-strip">
+    <div>
+      <div class="bid-label">Current Bid</div>
+      <div class="bid-value" id="bidValue">$500</div>
+    </div>
+    <div class="bidder-tag" id="bidderTag">—</div>
+  </div>
+
+  <div class="total-panel">
+    <div class="total-label">Estimated Total Landed Cost</div>
+    <div class="total-value" id="totalValue">$0</div>
+    <div class="total-range" id="totalRange">bid + fees + freight + repair (low estimate)</div>
+
+    <div class="stack-bar" id="stackBar">
+      <div class="seg seg-bid" style="width:40%"></div>
+      <div class="seg seg-fee" style="width:15%"></div>
+      <div class="seg seg-freight" style="width:15%"></div>
+      <div class="seg seg-repair" style="width:30%"></div>
+    </div>
+    <div class="stack-legend">
+      <span><i class="swatch" style="background:#3A4048"></i>Bid</span>
+      <span><i class="swatch" style="background:var(--steel)"></i>Buyer fee</span>
+      <span><i class="swatch" style="background:#6B7B8A"></i>Freight</span>
+      <span><i class="swatch" style="background:var(--amber)"></i>Repair (est.)</span>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-label">Bid Integrity</div>
+      <div class="risk-badge risk-low" id="riskBadge">Low risk</div>
+      <div class="risk-detail" id="riskDetail">No unusual bidding patterns detected on this lot.</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Comparable Sale Value</div>
+      <div class="val-number" id="valNumber">—</div>
+      <div class="val-conf conf-none" id="valConf">awaiting comps</div>
+    </div>
+  </div>
+
+  <div class="footnote">TrueBid recomputes on every bid. <b id="modeLabel">Demo mode — simulated feed</b></div>
+
+</div>
+
+<script type="module">
+import {
+  fmt,
+  computeStackSegments,
+  confidenceClass,
+  riskLabel,
+  riskDetailText,
+  DEMO_FREIGHT,
+  DEMO_REPAIR_LOW,
+  DEMO_REPAIR_HIGH,
+  DEMO_LOGIN_BIDDER_ID,
+  nextBidIncrement,
+  calcDemoFee,
+  isRiskyTick,
+  pickDemoBidder,
+  buildAuthenticatedWsUrl,
+  buildAuthHeader,
+} from './calc.js';
+
+(function(){
+  // ---- deployment config ----
+  // Local dev (docker compose up) works with these defaults untouched.
+  // Deploying somewhere hosted: replace these two with your deployed
+  // gateway URLs (wss:// not ws:// if served over HTTPS - browsers
+  // block mixed-content ws:// from an https:// page).
+  //
+  // NOTE: valuation now goes through the gateway (GATEWAY_HTTP), not
+  // directly to valuation-service's own host port. Hitting
+  // valuation-service directly would bypass the gateway's auth check
+  // entirely - see docker-compose.yml's comment on that port and
+  // docs/PRODUCTION_READINESS.md.
+  const GATEWAY_HTTP = "http://localhost:8000";
+  const GATEWAY_WS = "ws://localhost:8000/ws/LOT-1001";
+
+  const els = {
+    connDot: document.getElementById('connDot'),
+    connLabel: document.getElementById('connLabel'),
+    bidValue: document.getElementById('bidValue'),
+    bidderTag: document.getElementById('bidderTag'),
+    totalValue: document.getElementById('totalValue'),
+    totalRange: document.getElementById('totalRange'),
+    riskBadge: document.getElementById('riskBadge'),
+    riskDetail: document.getElementById('riskDetail'),
+    valNumber: document.getElementById('valNumber'),
+    valConf: document.getElementById('valConf'),
+    modeLabel: document.getElementById('modeLabel'),
+    stackBar: document.getElementById('stackBar'),
+  };
+
+  function flashTotal(){
+    els.totalValue.classList.add('flash');
+    setTimeout(() => els.totalValue.classList.remove('flash'), 350);
+  }
+
+  function applyCostUpdate(data){
+    els.bidValue.textContent = fmt(data.bid_amount);
+    els.totalValue.textContent = fmt(data.total_landed_cost_low);
+    els.totalRange.textContent =
+      `${fmt(data.total_landed_cost_low)}–${fmt(data.total_landed_cost_high)} · repair confidence: ${data.repair_confidence}`;
+    flashTotal();
+
+    const { bidPct, feePct, freightPct, repairPct } = computeStackSegments({
+      bid: data.bid_amount, fee: data.buyer_fee, freight: data.freight_estimate, repair: data.repair_low
+    });
+    const segs = els.stackBar.children;
+    segs[0].style.width = bidPct + '%';
+    segs[1].style.width = feePct + '%';
+    segs[2].style.width = freightPct + '%';
+    segs[3].style.width = repairPct + '%';
+  }
+
+  function applyAnomaly(data){
+    const level = data.risk_level || 'low';
+    els.riskBadge.className = 'risk-badge risk-' + level;
+    els.riskBadge.textContent = riskLabel(data.risk_level);
+    els.riskDetail.textContent = riskDetailText(data.flags);
+    if (data.bidder_id) els.bidderTag.textContent = data.bidder_id;
+  }
+
+  function applyValuation(data){
+    if (data.comp_valuation){
+      els.valNumber.textContent = fmt(data.comp_valuation);
+      els.valConf.textContent = data.confidence + ' confidence · ' + data.comp_count + ' comps';
+      els.valConf.className = 'val-conf ' + confidenceClass(data.confidence);
+    }
+  }
+
+  // ---- log in, then connect ----
+  // Simulates the hand-off from the real auction platform's existing
+  // session (see services/gateway/src/auth.ts) - the demo logs itself
+  // in automatically as a fixed demo bidder so the ticker still "just
+  // works" with no login form, while exercising the real auth path
+  // (JWT on the WS handshake and on the valuation request) rather than
+  // skipping it for the demo.
+  let socket;
+
+  async function loginAndConnect(){
+    let token;
+    try{
+      const res = await fetch(`${GATEWAY_HTTP}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bidder_id: DEMO_LOGIN_BIDDER_ID }),
+      });
+      if (!res.ok) throw new Error(`login failed: ${res.status}`);
+      ({ token } = await res.json());
+    } catch(e){
+      startDemoMode();
+      return;
+    }
+
+    try{
+      socket = new WebSocket(buildAuthenticatedWsUrl(GATEWAY_WS, token));
+      socket.onopen = () => {
+        els.connDot.classList.add('live');
+        els.connLabel.textContent = 'Live';
+        els.modeLabel.textContent = 'Connected to gateway';
+      };
+      socket.onmessage = (evt) => {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === 'cost_update') applyCostUpdate(msg.data);
+        if (msg.type === 'anomaly_score') applyAnomaly(msg.data);
+      };
+      socket.onerror = startDemoMode;
+      socket.onclose = () => { if (els.connLabel.textContent === 'Connecting…') startDemoMode(); };
+
+      fetch(`${GATEWAY_HTTP}/valuation/LOT-1001`, { headers: buildAuthHeader(token) })
+        .then(r => r.json()).then(applyValuation).catch(() => {});
+    } catch(e){
+      startDemoMode();
+    }
+
+    setTimeout(() => { if (!socket || socket.readyState !== 1) startDemoMode(); }, 1500);
+  }
+
+  // ---- fallback: local simulation so the UI is viewable standalone ----
+  let demoStarted = false;
+  function startDemoMode(){
+    if (demoStarted) return;
+    demoStarted = true;
+    els.connDot.classList.remove('live');
+    els.connLabel.textContent = 'Offline';
+    els.modeLabel.textContent = 'Demo mode — simulated feed (no backend detected)';
+
+    let bid = 500;
+
+    applyValuation({ comp_valuation: 3150, confidence: 'high', comp_count: 12 });
+
+    setInterval(() => {
+      bid += nextBidIncrement();
+      const fee = calcDemoFee(bid);
+      const freight = DEMO_FREIGHT;
+      const repairLow = DEMO_REPAIR_LOW, repairHigh = DEMO_REPAIR_HIGH;
+
+      applyCostUpdate({
+        bid_amount: bid, buyer_fee: fee, freight_estimate: freight,
+        repair_low: repairLow, repair_high: repairHigh, repair_confidence: 'medium',
+        total_landed_cost_low: bid+fee+freight+repairLow,
+        total_landed_cost_high: bid+fee+freight+repairHigh,
+      });
+
+      const bidder = pickDemoBidder();
+      const risky = isRiskyTick();
+      applyAnomaly({
+        bidder_id: bidder,
+        risk_level: risky ? 'medium' : 'low',
+        flags: risky ? [{type:'bid_velocity'}] : [],
+      });
+    }, 1800);
+  }
+
+  loginAndConnect();
+})();
+</script>
+</body>
+</html>
