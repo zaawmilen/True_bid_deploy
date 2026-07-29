@@ -1,0 +1,284 @@
+# Production deployment config.
+#
+# STANDALONE, not an overlay: run with
+#   docker compose -f docker-compose.prod.yml up -d --build
+# NOT `-f docker-compose.yml -f docker-compose.prod.yml`. Compose merges
+# (concatenates) `ports:` lists across multiple -f files rather than
+# replacing them, so layering this on top of docker-compose.yml would
+# silently keep every dev-convenience host port (5432, 6379, 8001, 8002,
+# 9094, etc.) published to the public internet alongside whatever this
+# file adds - the opposite of the point. This file is a complete,
+# self-contained definition instead, specifically so "what's exposed in
+# production" is something you can read top to bottom with no merge
+# semantics to reason about.
+#
+# What's different from docker-compose.yml:
+#   - Only Caddy publishes host ports (80/443). Every app service,
+#     Postgres, Redis, and Kafka are reachable only over the internal
+#     compose network - not from outside the box at all.
+#   - Prometheus and Jaeger's UI are bound to 127.0.0.1 specifically
+#     (not 0.0.0.0), so they're reachable via an SSH tunnel from this
+#     host but not from the public internet. Neither has its own
+#     authentication, unlike Grafana.
+#   - Grafana and the gateway are the two things actually routed
+#     publicly, both through Caddy (see ./Caddyfile).
+#   - NODE_ENV=production is set explicitly on every app service - this
+#     is what makes gateway's assertAuthConfigSafe() actually enforce a
+#     real JWT_SECRET (see services/gateway/src/auth.ts and
+#     docs/PRODUCTION_READINESS.md).
+#   - Required secrets use ${VAR:?...} instead of ${VAR:-default} -
+#     Compose refuses to start at all if you haven't set a real value,
+#     rather than silently deploying with the insecure local-dev
+#     defaults to a public server.
+#
+# Before running this, see docs/HOSTING.md for the full checklist
+# (DNS records, firewall rules, server sizing).
+
+name: truebid
+
+services:
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    environment:
+      KAFKA_NODE_ID: 1
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      # No PLAINTEXT_HOST listener here (unlike docker-compose.yml) -
+      # nothing on the host needs to reach Kafka directly in production,
+      # so there's no second audience to serve.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    # No ports: - internal only.
+    healthcheck:
+      test: ["CMD", "cub", "kafka-ready", "-b", "localhost:9092", "1", "20"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.65.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      # Loopback-only: reachable via `ssh -L 16686:localhost:16686 <host>`
+      # from your own machine, not from the public internet. Jaeger has
+      # no authentication of its own.
+      - "127.0.0.1:16686:16686"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-truebid}
+      POSTGRES_USER: ${POSTGRES_USER:-truebid}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set a real POSTGRES_PASSWORD in .env before deploying - do not use the local-dev default publicly}"
+    volumes:
+      - ./db:/docker-entrypoint-initdb.d
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U truebid -d truebid"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  valuation-service:
+    build: ./services/valuation-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-truebid}:${POSTGRES_PASSWORD:?Set a real POSTGRES_PASSWORD in .env before deploying}@postgres:5432/${POSTGRES_DB:-truebid}"
+      SERVICE_NAME: valuation-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    # No ports: - reachable only through the gateway's proxy (see
+    # docs/PRODUCTION_READINESS.md on why this port stayed public in
+    # docker-compose.yml's local-dev config but must not here).
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  cost-engine:
+    build: ./services/cost-engine
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      KAFKA_BOOTSTRAP: kafka:9092
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-truebid}:${POSTGRES_PASSWORD:?Set a real POSTGRES_PASSWORD in .env before deploying}@postgres:5432/${POSTGRES_DB:-truebid}"
+      SERVICE_NAME: cost-engine
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    # No ports: - internal only, same reasoning as valuation-service above.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  anomaly-service:
+    build: ./services/anomaly-service
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      KAFKA_BOOTSTRAP: kafka:9092
+      REDIS_URL: redis://redis:6379/0
+      SERVICE_NAME: anomaly-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  gateway:
+    build: ./services/gateway
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cost-engine:
+        condition: service_healthy
+      valuation-service:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      KAFKA_BOOTSTRAP: kafka:9092
+      COST_ENGINE_URL: http://cost-engine:8000
+      VALUATION_SERVICE_URL: http://valuation-service:8000
+      SERVICE_NAME: gateway
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # No insecure fallback here on purpose - see auth.ts's
+      # assertAuthConfigSafe(), which refuses to boot under
+      # NODE_ENV=production if this is still the local-dev default. The
+      # ${VAR:?...} below fails even earlier, at `docker compose up`
+      # time, before a container is even started.
+      JWT_SECRET: "${JWT_SECRET:?Set a real JWT_SECRET in .env before deploying - generate one via openssl rand -base64 48}"
+      JWT_EXPIRY: ${JWT_EXPIRY:-2h}
+      RATE_LIMIT_HTTP_WINDOW_MS: ${RATE_LIMIT_HTTP_WINDOW_MS:-60000}
+      RATE_LIMIT_HTTP_MAX: ${RATE_LIMIT_HTTP_MAX:-120}
+      RATE_LIMIT_WS_MAX_CONNECTIONS: ${RATE_LIMIT_WS_MAX_CONNECTIONS:-10}
+      RATE_LIMIT_WS_WINDOW_MS: ${RATE_LIMIT_WS_WINDOW_MS:-60000}
+    # No ports: - Caddy reaches this over the internal network as
+    # gateway:8000. This is the one app service anything public ever
+    # talks to, and even that's indirect, through Caddy.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  bid-stream-consumer:
+    build: ./services/bid-stream-consumer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      KAFKA_BOOTSTRAP: kafka:9092
+      SERVICE_NAME: bid-stream-consumer
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      # Loopback-only, same reasoning as Jaeger above - no auth of its
+      # own, so it isn't routed through Caddy publicly.
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    depends_on:
+      - prometheus
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?Set a real GRAFANA_ADMIN_PASSWORD in .env before deploying - do not use the word admin publicly}"
+    # No ports: - routed publicly through Caddy at GRAFANA_DOMAIN
+    # instead, using Grafana's own login (the password above) as the
+    # actual authentication layer.
+    restart: unless-stopped
+
+  # The only public entry point. Terminates HTTPS (automatic Let's
+  # Encrypt certs) and reverse-proxies to gateway/grafana over the
+  # internal network - see ./Caddyfile.
+  caddy:
+    image: caddy:2.8-alpine
+    depends_on:
+      - gateway
+      - grafana
+    environment:
+      ACME_EMAIL: "${ACME_EMAIL:?Set ACME_EMAIL in .env - Lets Encrypt needs a real contact address}"
+      DOMAIN: "${DOMAIN:?Set DOMAIN in .env, e.g. truebid.yourdomain.com - point an A record at this servers IP first}"
+      GRAFANA_DOMAIN: "${GRAFANA_DOMAIN:?Set GRAFANA_DOMAIN in .env, e.g. monitoring.yourdomain.com - point an A record at this servers IP first}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  prometheus-data:
+  grafana-data:
+  caddy-data:
+  caddy-config:

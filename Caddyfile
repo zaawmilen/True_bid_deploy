@@ -1,0 +1,37 @@
+# Production reverse proxy config. Only used by docker-compose.prod.yml
+# (see that file's own header comment for why it's a separate, standalone
+# file rather than an overlay on docker-compose.yml).
+#
+# Caddy handles WebSocket upgrades automatically through reverse_proxy -
+# no special config needed the way NGINX would require
+# (proxy_set_header Upgrade/Connection). It also handles HTTPS
+# certificates automatically via Let's Encrypt for both site blocks below,
+# as long as DOMAIN/GRAFANA_DOMAIN actually point at this server's IP
+# (an A record each) before you start this stack - Caddy's ACME challenge
+# needs that to succeed.
+#
+# Required env vars (set in .env, see .env.example):
+#   ACME_EMAIL      - Let's Encrypt will email this address about
+#                      certificate issues (expiry problems, etc.)
+#   DOMAIN          - e.g. truebid.yourdomain.com -> the gateway
+#   GRAFANA_DOMAIN  - e.g. monitoring.yourdomain.com -> Grafana
+#
+# Everything else (Postgres, Redis, Kafka, cost-engine, valuation-service,
+# anomaly-service, bid-stream-consumer, Jaeger's OTLP receiver) is NOT
+# routed here on purpose - see docker-compose.prod.yml, which doesn't
+# publish host ports for any of them at all. Prometheus and Jaeger's UI
+# are reachable only via an SSH tunnel to 127.0.0.1 on this host (also in
+# docker-compose.prod.yml) - deliberately not public, since neither has
+# any authentication of its own the way Grafana does.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	reverse_proxy gateway:8000
+}
+
+{$GRAFANA_DOMAIN} {
+	reverse_proxy grafana:3000
+}
