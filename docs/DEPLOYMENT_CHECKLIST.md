@@ -79,9 +79,10 @@ deployed:
       haven't already — recruiters skim before they read; the pitch
       paragraph at the top currently does this well, don't bury it under
       the architecture diagram.
-- [ ] If you record a demo GIF/video (recommended — this was on the
-      original punch list), do it *after* item 1 above is confirmed
-      working, not before.
+- [x] Real, multi-commit git history — pushed to
+      `github.com/zaawmilen/True_bid_deploy` as a sequence of scoped
+      commits, not one single dump. The README's CI badge points at the
+      real repo and is confirmed green on GitHub's own runners.
 
 ## 6. Nice-to-have, not blocking
 

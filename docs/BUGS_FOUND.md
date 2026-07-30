@@ -22,7 +22,18 @@ useful "if you hit X, check Y" reference:
    compose environment block, so it fell back to the code's default of
    `localhost:9092` — which inside its own container refers to itself,
    not the Kafka container. Manifested as `ECONNREFUSED 127.0.0.1:9092`.
-3. **Kafka cold-start race**: `depends_on: kafka` only waits for the
+3. **CI failed on real-infra integration tests specifically, on Node
+   20** (`cost-engine`, `valuation-service`, `anomaly-service` - the
+   three services with `testcontainers`-backed tests): `TypeError:
+   webidl.util.markAsUncloneable is not a function`, thrown at import
+   time from inside `testcontainers`' HTTP wait-strategy module (via
+   `undici`), before any test logic ran. `gateway` and
+   `bid-stream-consumer` - no `testcontainers` usage - passed on the same
+   CI run, and every test that did execute (73 of them) passed, which is
+   what pointed at a Node-version/runtime incompatibility rather than a
+   real test or app bug. Fixed by bumping `.github/workflows/ci.yml`'s
+   `NODE_VERSION` from `20` to `22`.
+4. **Kafka cold-start race**: `depends_on: kafka` only waits for the
    *container process* to start, not for Kafka to finish leader election
    and actually become queryable. Confluent's image reliably takes longer
    than KafkaJS's default retry budget to settle, causing
@@ -31,13 +42,13 @@ useful "if you hit X, check Y" reference:
    healthchecks (`cub kafka-ready` / `cub zk-ready`) with `condition:
    service_healthy` gating startup order, and every KafkaJS client uses a
    more patient retry policy (15 retries, 30s max) as defense-in-depth.
-4. **Consumer crash doesn't auto-restart**: KafkaJS's `consumer.run()`
+5. **Consumer crash doesn't auto-restart**: KafkaJS's `consumer.run()`
    does not recover on its own after a `Crash` event (which the race in
    #3 can still trigger occasionally even with healthchecks) — it just
    logs `[Consumer] Stopped` and gives up. `cost-engine`, `anomaly-service`,
    and `gateway` all now wrap their consumer subscribe/run in an explicit
    reconnect-with-backoff loop.
-5. **`gateway`'s two internal consumers shared one `groupId: "gateway"`**
+6. **`gateway`'s two internal consumers shared one `groupId: "gateway"`**
    despite subscribing to different topics (`cost-updates`,
    `anomaly-scores`). Kafka only tracks one partition assignment per
    group, so the group leader assigned all partitions to itself and left
@@ -46,7 +57,7 @@ useful "if you hit X, check Y" reference:
    WebSocket showed "Live" and risk updates worked, but the cost-stack bar
    and total landed cost never moved. Fixed by giving each topic its own
    groupId (`gateway-${topic}`).
-6. **Missing CORS headers on `valuation-service` and `cost-engine`**: the
+7. **Missing CORS headers on `valuation-service` and `cost-engine`**: the
    frontend's comparable-sale-value fetch is a plain HTTP `fetch()`
    (unlike the WebSocket path used for streaming updates, which isn't
    subject to CORS), and neither service sent
@@ -54,7 +65,7 @@ useful "if you hit X, check Y" reference:
    response and the frontend's `.catch(() => {})` swallowed the failure,
    leaving "awaiting comps" displayed indefinitely with no visible error.
    Fixed by adding the header to both services.
-7. **Kafka's single listener couldn't correctly serve both containers and
+8. **Kafka's single listener couldn't correctly serve both containers and
    the host machine.** `KAFKA_ADVERTISED_LISTENERS` was set to
    `kafka:9092` — correct for other containers, but a client connecting
    from the host (e.g. `test/e2e/smoke.mjs` run directly, not from inside
@@ -105,7 +116,7 @@ modules unit-tested. Two more real bugs were caught this way:
    and partially masked itself. Fixed to score the latest interval
    against a baseline built only from prior intervals.
 
-Ten real bugs total across every layer — compose orchestration, Kafka
+Eleven real bugs total across every layer and CI runtime compatibility — compose orchestration, Kafka
 client behavior, cross-service consumer-group design, browser CORS, and
 core business logic — found by actually running the thing rather than
 stopping at "it compiles."
